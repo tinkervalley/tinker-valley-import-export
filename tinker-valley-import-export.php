@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Tinker Valley Import & Export
  * Description: Imports and exports mapped post JSON files with ACF field mapping and background media sideloading.
- * Version: 0.2.0
+ * Version: 0.2.1
  * Author: Tinker Valley
  */
 
@@ -951,30 +951,53 @@ final class Tinker_Valley_Import_Export
             return;
         }
 
-        $taxonomy = taxonomy_exists('project_category') ? 'project_category' : 'category';
-        if (!is_object_in_taxonomy($post_type, $taxonomy)) {
-            return;
-        }
-
-        $term_ids = [];
+        $term_ids_by_taxonomy = [];
         foreach ($categories as $category) {
+            if (!is_array($category)) {
+                continue;
+            }
+
+            $taxonomy = self::resolve_category_taxonomy($category, $post_type);
+            if (!$taxonomy) {
+                continue;
+            }
+
             $name = sanitize_text_field($category['name'] ?? '');
             $slug = sanitize_title($category['slug'] ?? $name);
             if (!$name) {
                 continue;
             }
+
             $term = term_exists($slug, $taxonomy);
             if (!$term) {
                 $term = wp_insert_term($name, $taxonomy, ['slug' => $slug]);
             }
             if (!is_wp_error($term)) {
-                $term_ids[] = (int) (is_array($term) ? $term['term_id'] : $term);
+                $term_ids_by_taxonomy[$taxonomy][] = (int) (is_array($term) ? $term['term_id'] : $term);
             }
         }
 
-        if ($term_ids) {
-            wp_set_object_terms($post_id, $term_ids, $taxonomy, false);
+        foreach ($term_ids_by_taxonomy as $taxonomy => $term_ids) {
+            wp_set_object_terms($post_id, array_values(array_unique($term_ids)), $taxonomy, false);
         }
+    }
+
+    private static function resolve_category_taxonomy($category, $post_type)
+    {
+        $declared_taxonomy = sanitize_key($category['taxonomy'] ?? '');
+        if ($declared_taxonomy) {
+            return taxonomy_exists($declared_taxonomy) && is_object_in_taxonomy($post_type, $declared_taxonomy)
+                ? $declared_taxonomy
+                : '';
+        }
+
+        foreach (['project_category', 'category'] as $fallback_taxonomy) {
+            if (taxonomy_exists($fallback_taxonomy) && is_object_in_taxonomy($post_type, $fallback_taxonomy)) {
+                return $fallback_taxonomy;
+            }
+        }
+
+        return '';
     }
 
     private static function extract_records($payload)

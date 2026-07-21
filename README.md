@@ -25,7 +25,7 @@ Each JSON record can create or update a post of the selected target post type an
 - post title, slug, status, content, date
 - old source ID stored as `_tvpi_old_post_id`
 - featured image URL
-- project categories, using `project_category` if it exists, otherwise `category`
+- taxonomy terms using each category's declared `taxonomy` value, with legacy fallback support for `project_category` and `category`
 - any ACF field included in the record's `acf` object
 
 ACF field definitions assigned to the target post are used to preserve their field types. Media URLs in any ACF `image`, `file`, or `gallery` field are sideloaded into the Media Library, including media fields nested inside ACF groups and repeaters. Imported media stores the original URL as `_tvpi_source_url` so repeat imports can reuse the same attachment. The source URL may use the same hostname as the WordPress site.
