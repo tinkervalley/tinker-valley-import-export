@@ -20,27 +20,15 @@ Tools > Tinker Valley Import & Export
 
 ## What It Imports
 
-Each JSON record can create or update a `project` post and map:
+Each JSON record can create or update a post of the selected target post type and map:
 
 - post title, slug, status, content, date
 - old source ID stored as `_tvpi_old_post_id`
 - featured image URL
 - project categories, using `project_category` if it exists, otherwise `category`
-- ACF fields:
-  - `designer`
-  - `specifications`
-  - `floorplan_pdf`
-  - `floorplan_image`
-  - `project_gallery`
-  - `video`
-  - `features`
-  - `additional_features`
-  - `interior_finishes`
-  - `exterior_build`
-  - `mechanical`
-  - `additional_specs`
+- any ACF field included in the record's `acf` object
 
-Media URLs in any ACF `image`, `file`, or `gallery` field are sideloaded into the Media Library, including media fields nested inside ACF groups and repeaters. Imported media stores the original URL as `_tvpi_source_url` so repeat imports can reuse the same attachment. The source URL may use the same hostname as the WordPress site.
+ACF field definitions assigned to the target post are used to preserve their field types. Media URLs in any ACF `image`, `file`, or `gallery` field are sideloaded into the Media Library, including media fields nested inside ACF groups and repeaters. Imported media stores the original URL as `_tvpi_source_url` so repeat imports can reuse the same attachment. The source URL may use the same hostname as the WordPress site.
 
 During import, you can also choose to reuse existing Media Library files with the same filename before downloading from the source URL.
 
