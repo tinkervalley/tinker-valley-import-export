@@ -30,6 +30,8 @@ Each JSON record can create or update a post of the selected target post type an
 
 ACF field definitions assigned to the target post are used to preserve their field types. Media URLs in any ACF `image`, `file`, or `gallery` field are sideloaded into the Media Library, including media fields nested inside ACF groups and repeaters. Imported media stores the original URL as `_tvpi_source_url` so repeat imports can reuse the same attachment. The source URL may use the same hostname as the WordPress site.
 
+Declared taxonomy terms are assigned after ACF values so an empty ACF taxonomy field cannot clear the imported term relationships.
+
 During import, you can also choose to reuse existing Media Library files with the same filename before downloading from the source URL.
 
 ## What It Exports

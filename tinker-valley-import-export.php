@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Tinker Valley Import & Export
  * Description: Imports and exports mapped post JSON files with ACF field mapping and background media sideloading.
- * Version: 0.2.1
+ * Version: 0.2.2
  * Author: Tinker Valley
  */
 
@@ -475,9 +475,11 @@ final class Tinker_Valley_Import_Export
             update_post_meta($post_id, self::OLD_ID_META, $old_id);
         }
 
-        self::assign_categories($post_id, $record['categories'] ?? [], $job['target_post_type']);
         self::import_media_fields($post_id, $record, $job);
         self::import_acf_fields($post_id, $record['acf'] ?? [], $job);
+        // Apply declared taxonomy terms after ACF. An ACF taxonomy field with
+        // "Save Terms" enabled can otherwise overwrite these relationships.
+        self::assign_categories($post_id, $record['categories'] ?? [], $job['target_post_type']);
 
         return [
             'action' => $was_update ? 'Updated' : 'Created',
