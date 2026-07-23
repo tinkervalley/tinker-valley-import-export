@@ -2,6 +2,12 @@
 
 WordPress plugin for importing and exporting mapped post JSON files with ACF field mapping.
 
+## Highlights
+
+- Import and export posts, ACF fields, taxonomy terms, and media
+- Background batch processing for larger imports
+- Automatic updates from public GitHub releases
+
 ## Install
 
 Copy the `tinker-valley-import-export` folder into:
@@ -17,6 +23,24 @@ The plugin page is under:
 ```text
 Tools > Tinker Valley Import & Export
 ```
+
+## Updates
+
+The plugin checks the latest public GitHub release using the WordPress HTTP API. Stable releases containing the `tinker-valley-import-export.zip` asset appear in the normal WordPress Updates interface.
+
+The Plugins screen includes **Check for updates** and **Enable automatic updates** links for this plugin.
+
+## Creating a Release
+
+Update the version in both the plugin header and `TVPI_VERSION`, commit the change, then create and push the matching semantic version tag:
+
+```bash
+git tag v0.3.0
+git push origin main
+git push origin v0.3.0
+```
+
+The release workflow verifies that the tag matches the plugin version, packages the repository inside the required `tinker-valley-import-export/` directory, creates a GitHub Release, and attaches `tinker-valley-import-export.zip`.
 
 ## What It Imports
 

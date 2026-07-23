@@ -2,13 +2,23 @@
 /**
  * Plugin Name: Tinker Valley Import & Export
  * Description: Imports and exports mapped post JSON files with ACF field mapping and background media sideloading.
- * Version: 0.2.2
+ * Version: 0.3.0
  * Author: Tinker Valley
+ * Text Domain: tinker-valley-import-export
+ * Requires at least: 6.4
+ * Requires PHP: 7.4
+ * Update URI: https://github.com/tinkervalley/tinker-valley-import-export
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
+
+define('TVPI_VERSION', '0.3.0');
+define('TVPI_FILE', __FILE__);
+define('TVPI_PATH', plugin_dir_path(__FILE__));
+
+require_once TVPI_PATH . 'includes/class-tvpi-updater.php';
 
 final class Tinker_Valley_Import_Export
 {
@@ -1146,5 +1156,6 @@ final class Tinker_Valley_Import_Export
 }
 
 Tinker_Valley_Import_Export::init();
+TVPI_Updater::instance();
 register_activation_hook(__FILE__, ['Tinker_Valley_Import_Export', 'activate']);
 register_deactivation_hook(__FILE__, ['Tinker_Valley_Import_Export', 'deactivate']);
