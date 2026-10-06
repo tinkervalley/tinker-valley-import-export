@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Tinker Valley Import & Export
  * Description: Imports and exports mapped post JSON files with ACF field mapping and background media sideloading.
- * Version: 0.3.0
+ * Version: 0.3.1
  * Author: Tinker Valley
  * Text Domain: tinker-valley-import-export
  * Requires at least: 6.4
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('TVPI_VERSION', '0.3.0');
+define('TVPI_VERSION', '0.3.1');
 define('TVPI_FILE', __FILE__);
 define('TVPI_PATH', plugin_dir_path(__FILE__));
 
@@ -143,9 +143,20 @@ final class Tinker_Valley_Import_Export
                         <th scope="row">ACF/meta fields</th>
                         <td>
                             <label>
-                                <input type="checkbox" name="export_all_meta" value="1">
-                                Export all public custom meta instead of actual ACF fields only
+                                <input type="checkbox" name="export_all_meta" value="1" checked>
+                                Include custom meta fields added by other plugins
                             </label>
+                            <p class="description">ACF fields stay in their original structure. Meta from other plugins is added alongside them, including protected keys that are not WordPress internals.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Media</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="export_media_urls" value="1" checked>
+                                Export full media URLs for the featured image and image fields stored as attachment IDs
+                            </label>
+                            <p class="description">Turns featured images and image, file, or gallery values that only store an attachment ID into the original file URL.</p>
                         </td>
                     </tr>
                 </table>
@@ -338,7 +349,8 @@ final class Tinker_Valley_Import_Export
         }
 
         $export_all_meta = !empty($_POST['export_all_meta']);
-        $payload = self::build_export_payload($post_type, $statuses, $export_all_meta);
+        $export_media_urls = !empty($_POST['export_media_urls']);
+        $payload = self::build_export_payload($post_type, $statuses, $export_all_meta, $export_media_urls);
         $filename = sprintf('tv-post-export-%s-%s.json', $post_type, gmdate('Y-m-d-His'));
 
         nocache_headers();
@@ -501,7 +513,7 @@ final class Tinker_Valley_Import_Export
         ];
     }
 
-    private static function build_export_payload($post_type, $statuses, $export_all_meta)
+    private static function build_export_payload($post_type, $statuses, $export_all_meta, $export_media_urls)
     {
         $posts = get_posts([
             'post_type' => $post_type,
@@ -513,7 +525,7 @@ final class Tinker_Valley_Import_Export
 
         $records = [];
         foreach ($posts as $post) {
-            $records[] = self::export_post_record($post, $export_all_meta);
+            $records[] = self::export_post_record($post, $export_all_meta, $export_media_urls);
         }
 
         return [
@@ -529,11 +541,15 @@ final class Tinker_Valley_Import_Export
         ];
     }
 
-    private static function export_post_record($post, $export_all_meta)
+    private static function export_post_record($post, $export_all_meta, $export_media_urls)
     {
         $post_id = (int) $post->ID;
         $old_id = get_post_meta($post_id, self::OLD_ID_META, true);
-        $featured_image_id = get_post_thumbnail_id($post_id);
+        $featured_image_id = (int) get_post_thumbnail_id($post_id);
+        $featured_image_url = '';
+        if ($export_media_urls && $featured_image_id) {
+            $featured_image_url = wp_get_attachment_url($featured_image_id) ?: '';
+        }
 
         return [
             'old_id' => $old_id !== '' ? $old_id : $post_id,
@@ -544,19 +560,39 @@ final class Tinker_Valley_Import_Export
             'categories' => self::export_post_terms($post_id, $post->post_type),
             'content' => $post->post_content,
             'content_text' => wp_strip_all_tags($post->post_content),
-            'featured_image_url' => $featured_image_id ? wp_get_attachment_url($featured_image_id) : '',
-            'acf' => $export_all_meta ? self::export_public_meta($post_id) : self::export_actual_acf($post_id),
+            'featured_image_id' => $featured_image_id ?: '',
+            'featured_image_url' => $featured_image_url,
+            'acf' => self::export_field_bag($post_id, $export_all_meta, $export_media_urls),
         ];
     }
 
-    private static function export_actual_acf($post_id)
+    private static function export_field_bag($post_id, $export_all_meta, $export_media_urls)
     {
-        if (!function_exists('acf_get_field_groups') || !function_exists('acf_get_fields')) {
-            return self::export_public_meta($post_id);
+        $acf_active = function_exists('acf_get_field_groups') && function_exists('acf_get_fields');
+        if (!$acf_active) {
+            return self::export_custom_meta($post_id, $export_media_urls, [], []);
         }
 
+        $acf = self::export_actual_acf($post_id, $export_media_urls);
+        if (!$export_all_meta) {
+            return $acf['fields'];
+        }
+
+        $custom_meta = self::export_custom_meta(
+            $post_id,
+            $export_media_urls,
+            array_keys($acf['fields']),
+            $acf['complex_prefixes']
+        );
+
+        return array_merge($custom_meta, $acf['fields']);
+    }
+
+    private static function export_actual_acf($post_id, $export_media_urls)
+    {
         $field_groups = acf_get_field_groups(['post_id' => $post_id]);
         $out = [];
+        $complex_prefixes = [];
 
         foreach ($field_groups as $field_group) {
             $fields = acf_get_fields($field_group);
@@ -568,14 +604,20 @@ final class Tinker_Valley_Import_Export
                 if (empty($field['name'])) {
                     continue;
                 }
-                $out[$field['name']] = self::export_acf_field_value($field, $post_id);
+                $out[$field['name']] = self::export_acf_field_value($field, $post_id, null, true, $export_media_urls);
+                if (in_array($field['type'] ?? '', ['group', 'repeater', 'flexible_content', 'clone'], true)) {
+                    $complex_prefixes[] = $field['name'];
+                }
             }
         }
 
-        return $out;
+        return [
+            'fields' => $out,
+            'complex_prefixes' => $complex_prefixes,
+        ];
     }
 
-    private static function export_acf_field_value($field, $post_id, $raw_value = null, $is_top_level = true)
+    private static function export_acf_field_value($field, $post_id, $raw_value = null, $is_top_level = true, $export_media_urls = false)
     {
         $value = $raw_value;
         if ($value === null && $is_top_level && function_exists('get_field')) {
@@ -584,7 +626,7 @@ final class Tinker_Valley_Import_Export
 
         $type = $field['type'] ?? '';
 
-        if ($type === 'group') {
+        if ($type === 'group' || $type === 'clone') {
             $group = [];
             foreach (($field['sub_fields'] ?? []) as $sub_field) {
                 if (empty($sub_field['name'])) {
@@ -593,9 +635,11 @@ final class Tinker_Valley_Import_Export
                 $sub_value = is_array($value) && array_key_exists($sub_field['name'], $value)
                     ? $value[$sub_field['name']]
                     : get_post_meta($post_id, $field['name'] . '_' . $sub_field['name'], true);
-                $group[$sub_field['name']] = self::export_acf_field_value($sub_field, $post_id, $sub_value, false);
+                $group[$sub_field['name']] = self::export_acf_field_value($sub_field, $post_id, $sub_value, false, $export_media_urls);
             }
-            return $group;
+            if ($type === 'group' || $group) {
+                return $group;
+            }
         }
 
         if ($type === 'repeater') {
@@ -610,20 +654,26 @@ final class Tinker_Valley_Import_Export
                         continue;
                     }
                     $sub_value = is_array($row) && array_key_exists($sub_field['name'], $row) ? $row[$sub_field['name']] : null;
-                    $exported_row[$sub_field['name']] = self::export_acf_field_value($sub_field, $post_id, $sub_value, false);
+                    $exported_row[$sub_field['name']] = self::export_acf_field_value($sub_field, $post_id, $sub_value, false, $export_media_urls);
                 }
                 $rows[] = $exported_row;
             }
             return $rows;
         }
 
-        if (in_array($type, ['image', 'file'], true)) {
-            return self::media_value_to_url($value);
+        if ($type === 'flexible_content') {
+            return self::export_flexible_content_value($field, $post_id, $value, $export_media_urls);
         }
 
-        if ($type === 'gallery') {
+        $is_media_list = self::acf_field_is_gallery($type)
+            || (self::acf_field_is_single_media($type) && is_array($value) && self::is_list_array($value));
+        if ($is_media_list) {
+            $items = is_array($value) ? $value : self::scalar_to_list($value);
+            if (!$export_media_urls) {
+                return array_values((array) self::normalize_export_value($items));
+            }
             $urls = [];
-            foreach ((array) $value as $item) {
+            foreach ($items as $item) {
                 $url = self::media_value_to_url($item);
                 if ($url) {
                     $urls[] = $url;
@@ -632,25 +682,199 @@ final class Tinker_Valley_Import_Export
             return $urls;
         }
 
+        if (self::acf_field_is_single_media($type)) {
+            if (!$export_media_urls) {
+                return self::normalize_export_value($value);
+            }
+            $url = self::media_value_to_url($value);
+            if ($url !== '' || $value === '' || $value === null || $value === false || $value === 0 || $value === '0') {
+                return $url;
+            }
+            return self::normalize_export_value($value);
+        }
+
         if (in_array($type, ['checkbox', 'select', 'relationship', 'post_object', 'taxonomy'], true) && is_array($value)) {
             return array_values(self::normalize_export_value($value));
+        }
+
+        if ($export_media_urls) {
+            return self::expand_media_ids($value, $field['name'] ?? '');
         }
 
         return self::normalize_export_value($value);
     }
 
-    private static function export_public_meta($post_id)
+    private static function export_flexible_content_value($field, $post_id, $value, $export_media_urls)
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $layouts = [];
+        foreach (($field['layouts'] ?? []) as $layout) {
+            if (!empty($layout['name'])) {
+                $layouts[$layout['name']] = $layout;
+            }
+        }
+
+        $rows = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $layout_name = $row['acf_fc_layout'] ?? '';
+            $layout = $layouts[$layout_name] ?? null;
+            $exported_row = ['acf_fc_layout' => $layout_name];
+            foreach (($layout['sub_fields'] ?? []) as $sub_field) {
+                if (empty($sub_field['name'])) {
+                    continue;
+                }
+                $sub_value = array_key_exists($sub_field['name'], $row) ? $row[$sub_field['name']] : null;
+                $exported_row[$sub_field['name']] = self::export_acf_field_value($sub_field, $post_id, $sub_value, false, $export_media_urls);
+            }
+            $rows[] = $exported_row;
+        }
+
+        return $rows;
+    }
+
+    private static function export_custom_meta($post_id, $export_media_urls, $acf_field_names, $complex_prefixes)
     {
         $meta = get_post_meta($post_id);
         $out = [];
         foreach ($meta as $key => $values) {
-            if (strpos($key, '_') === 0) {
+            if (self::is_ignored_meta_key($key) || self::is_acf_owned_meta_key($key, $acf_field_names, $complex_prefixes)) {
                 continue;
             }
             $value = count($values) === 1 ? maybe_unserialize($values[0]) : array_map('maybe_unserialize', $values);
-            $out[$key] = self::normalize_export_value($value);
+            if (self::is_acf_field_reference($key, $value)) {
+                continue;
+            }
+            $out[$key] = $export_media_urls
+                ? self::expand_media_ids($value, $key)
+                : self::normalize_export_value($value);
         }
         return $out;
+    }
+
+    private static function is_ignored_meta_key($key)
+    {
+        $ignored = [
+            '_edit_lock',
+            '_edit_last',
+            '_encloseme',
+            '_pingme',
+            '_thumbnail_id',
+            '_wp_old_slug',
+            '_wp_old_date',
+            '_wp_trash_meta_status',
+            '_wp_trash_meta_time',
+            '_wp_desired_post_slug',
+            self::OLD_ID_META,
+            self::SOURCE_URL_META,
+        ];
+
+        if (in_array($key, $ignored, true)) {
+            return true;
+        }
+
+        return strpos($key, '_oembed_') === 0 || strpos($key, '_edit_') === 0;
+    }
+
+    private static function is_acf_field_reference($key, $value)
+    {
+        if ($key === '' || $key[0] !== '_') {
+            return false;
+        }
+
+        if (is_array($value)) {
+            $value = reset($value);
+        }
+
+        return is_string($value) && preg_match('/^field_[a-z0-9]+$/', $value);
+    }
+
+    private static function is_acf_owned_meta_key($key, $acf_field_names, $complex_prefixes)
+    {
+        $bare_key = ltrim($key, '_');
+        if (in_array($key, $acf_field_names, true) || in_array($bare_key, $acf_field_names, true)) {
+            return true;
+        }
+
+        foreach ($complex_prefixes as $prefix) {
+            if ($bare_key === $prefix || strpos($bare_key, $prefix . '_') === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function scalar_to_list($value)
+    {
+        if ($value === null || $value === '' || $value === false) {
+            return [];
+        }
+
+        return [$value];
+    }
+
+    private static function acf_field_is_single_media($type)
+    {
+        return preg_match('/(?:^|_)(image|file|attachment|media)(?:_|$)/', (string) $type) === 1;
+    }
+
+    private static function acf_field_is_gallery($type)
+    {
+        return $type === 'gallery' || strpos((string) $type, 'gallery') !== false;
+    }
+
+    private static function meta_key_is_media($key)
+    {
+        $segments = array_values(array_filter(preg_split('/[^a-z0-9]+/i', strtolower((string) $key))));
+        if (!$segments) {
+            return false;
+        }
+
+        $token = array_pop($segments);
+        if (in_array($token, ['id', 'ids', 'url', 'urls'], true)) {
+            $token = array_pop($segments);
+        }
+
+        return in_array($token, [
+            'image', 'images', 'img', 'imgs', 'photo', 'photos', 'picture', 'pictures',
+            'thumb', 'thumbs', 'thumbnail', 'thumbnails', 'logo', 'logos', 'icon', 'icons',
+            'banner', 'banners', 'gallery', 'galleries', 'avatar', 'avatars',
+            'attachment', 'attachments', 'file', 'files', 'pdf', 'pdfs', 'video', 'videos',
+            'poster', 'posters', 'cover', 'covers', 'hero', 'heroes', 'background', 'backgrounds',
+            'media',
+        ], true);
+    }
+
+    private static function expand_media_ids($value, $key = '')
+    {
+        if (is_array($value)) {
+            if (self::is_attachment_array($value)) {
+                $url = self::media_value_to_url($value);
+                return $url !== '' ? $url : self::normalize_export_value($value);
+            }
+
+            $expanded = [];
+            foreach ($value as $child_key => $child_value) {
+                $child_name = is_string($child_key) ? $child_key : $key;
+                $expanded[$child_key] = self::expand_media_ids($child_value, $child_name);
+            }
+            return $expanded;
+        }
+
+        if (self::meta_key_is_media($key) && is_numeric($value)) {
+            $url = self::attachment_id_to_url((int) $value);
+            if ($url) {
+                return $url;
+            }
+        }
+
+        return self::normalize_export_value($value);
     }
 
     private static function export_post_terms($post_id, $post_type)
@@ -682,20 +906,42 @@ final class Tinker_Valley_Import_Export
             return '';
         }
         if (is_numeric($value)) {
-            return wp_get_attachment_url((int) $value) ?: '';
+            $url = self::attachment_id_to_url((int) $value);
+            return $url !== '' ? $url : (string) self::normalize_export_value($value);
         }
         if (is_array($value)) {
-            if (!empty($value['url'])) {
+            if (!empty($value['url']) && is_string($value['url'])) {
                 return $value['url'];
             }
-            if (!empty($value['ID'])) {
-                return wp_get_attachment_url((int) $value['ID']) ?: '';
-            }
-            if (!empty($value['id'])) {
-                return wp_get_attachment_url((int) $value['id']) ?: '';
+            foreach (['ID', 'id'] as $id_key) {
+                if (!empty($value[$id_key]) && is_numeric($value[$id_key])) {
+                    $url = self::attachment_id_to_url((int) $value[$id_key]);
+                    if ($url !== '') {
+                        return $url;
+                    }
+                }
             }
         }
         return is_string($value) ? $value : '';
+    }
+
+    private static function attachment_id_to_url($id)
+    {
+        if ($id <= 0 || get_post_type($id) !== 'attachment') {
+            return '';
+        }
+
+        return wp_get_attachment_url($id) ?: '';
+    }
+
+    private static function is_attachment_array($value)
+    {
+        $id = $value['ID'] ?? $value['id'] ?? 0;
+        if (is_numeric($id) && (int) $id > 0 && get_post_type((int) $id) === 'attachment') {
+            return true;
+        }
+
+        return !empty($value['url']) && (!empty($value['mime_type']) || !empty($value['sizes']));
     }
 
     private static function normalize_export_value($value)
@@ -716,6 +962,8 @@ final class Tinker_Valley_Import_Export
             if ($attachment_id) {
                 set_post_thumbnail($post_id, $attachment_id);
             }
+        } elseif (!empty($record['featured_image_id']) && get_post_type((int) $record['featured_image_id']) === 'attachment') {
+            set_post_thumbnail($post_id, (int) $record['featured_image_id']);
         }
     }
 
@@ -751,6 +999,8 @@ final class Tinker_Valley_Import_Export
 
             if ($field) {
                 $acf[$field_name] = self::prepare_acf_field_media($value, $field, $post_id, $job);
+            } else {
+                $acf[$field_name] = self::prepare_untyped_media_value($value, $field_name, $post_id, $job);
             }
         }
 
@@ -779,15 +1029,13 @@ final class Tinker_Valley_Import_Export
     {
         $type = $field['type'] ?? '';
 
-        if (in_array($type, ['image', 'file'], true)) {
-            if (is_string($value) && self::is_remote_media_url($value)) {
-                $attachment_id = self::sideload_media($value, $post_id, $job);
-                return $attachment_id ?: $value;
-            }
-            return $value;
+        if (self::acf_field_is_gallery($type) && !is_array($value)) {
+            $value = self::scalar_to_list($value);
         }
 
-        if ($type === 'gallery' && is_array($value)) {
+        $is_media_list = self::acf_field_is_gallery($type)
+            || (self::acf_field_is_single_media($type) && is_array($value) && self::is_list_array($value));
+        if ($is_media_list && is_array($value)) {
             $prepared = [];
             foreach ($value as $item) {
                 if (is_string($item) && self::is_remote_media_url($item)) {
@@ -798,6 +1046,14 @@ final class Tinker_Valley_Import_Export
                 }
             }
             return $prepared;
+        }
+
+        if (self::acf_field_is_single_media($type)) {
+            if (is_string($value) && self::is_remote_media_url($value)) {
+                $attachment_id = self::sideload_media($value, $post_id, $job);
+                return $attachment_id ?: $value;
+            }
+            return $value;
         }
 
         if ($type === 'group' && is_array($value)) {
@@ -811,6 +1067,63 @@ final class Tinker_Valley_Import_Export
                 }
             }
             return $value;
+        }
+
+        if ($type === 'clone' && is_array($value)) {
+            return self::prepare_acf_sub_fields($value, $field['sub_fields'] ?? [], $post_id, $job);
+        }
+
+        if ($type === 'flexible_content' && is_array($value)) {
+            $layouts = [];
+            foreach (($field['layouts'] ?? []) as $layout) {
+                if (!empty($layout['name'])) {
+                    $layouts[$layout['name']] = $layout['sub_fields'] ?? [];
+                }
+            }
+            foreach ($value as $row_index => $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $sub_fields = $layouts[$row['acf_fc_layout'] ?? ''] ?? [];
+                $value[$row_index] = $sub_fields
+                    ? self::prepare_acf_sub_fields($row, $sub_fields, $post_id, $job)
+                    : self::prepare_untyped_media_value($row, '', $post_id, $job);
+            }
+            return $value;
+        }
+
+        return $value;
+    }
+
+    private static function prepare_untyped_media_value($value, $key, $post_id, $job)
+    {
+        if (is_string($value) && self::meta_key_is_media($key) && self::is_remote_media_url($value)) {
+            $attachment_id = self::sideload_media($value, $post_id, $job);
+            return $attachment_id ?: $value;
+        }
+
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        if (self::is_list_array($value) && self::meta_key_is_media($key)) {
+            $prepared = [];
+            foreach ($value as $item) {
+                if (is_string($item) && self::is_remote_media_url($item)) {
+                    $attachment_id = self::sideload_media($item, $post_id, $job);
+                    $prepared[] = $attachment_id ?: $item;
+                } else {
+                    $prepared[] = is_array($item)
+                        ? self::prepare_untyped_media_value($item, $key, $post_id, $job)
+                        : $item;
+                }
+            }
+            return $prepared;
+        }
+
+        foreach ($value as $child_key => $child_value) {
+            $child_name = is_string($child_key) ? $child_key : $key;
+            $value[$child_key] = self::prepare_untyped_media_value($child_value, $child_name, $post_id, $job);
         }
 
         return $value;

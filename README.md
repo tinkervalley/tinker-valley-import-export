@@ -65,10 +65,13 @@ The export panel lets you select a post type and download a JSON file in the sam
 Exports include:
 
 - post title, slug, status, content, date
-- featured image URL
+- featured image ID, and the original file URL when full media URLs are enabled
 - hierarchical taxonomy terms
-- actual ACF fields assigned to each post
-- optional public custom meta export
+- ACF fields assigned to each post, including groups, repeaters, clones, and flexible content
+- custom meta added by other plugins, included by default and merged with ACF fields
+- full media URLs for image, file, and gallery fields that only store an attachment ID, when that export option is enabled
+
+On import, media URLs in ACF image, file, and gallery fields are sideloaded. The same happens for other plugins' meta when the field name is an image, file, gallery, or similar media field.
 
 ## Background Processing
 
